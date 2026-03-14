@@ -318,7 +318,8 @@ class Intrinsics:
 
 
 def load_dataset(dataset_path):
-    split_dataset_type = dataset_path.split("/")
+    # Convert to lowercase for case-insensitive matching
+    split_dataset_type = [s.lower() for s in dataset_path.split("/")]
     if "tum" in split_dataset_type:
         return TUMDataset(dataset_path)
     if "euroc" in split_dataset_type:
@@ -332,7 +333,7 @@ def load_dataset(dataset_path):
     if "webcam" in split_dataset_type:
         return Webcam()
 
-    ext = split_dataset_type[-1].split(".")[-1]
+    ext = dataset_path.split("/")[-1].split(".")[-1]
     if ext in ["mp4", "avi", "MOV", "mov"]:
         return MP4Dataset(dataset_path)
     return RGBFiles(dataset_path)

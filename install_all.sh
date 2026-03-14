@@ -25,19 +25,24 @@ else
 fi
 
 # Determine pytorch-cuda version
+# NOTE: MASt3R-SLAM requires CUDA 12.4+ for libcu++ headers (cuda/std/limits)
 case "$CUDA_VERSION" in
-    11.8*) PYTORCH_CUDA="11.8" ;;
-    12.1*) PYTORCH_CUDA="12.1" ;;
+    11.8*) PYTORCH_CUDA="12.4" ; echo "Warning: System CUDA is 11.8 but using PyTorch CUDA 12.4 (required for libcu++)" ;;
+    12.1*) PYTORCH_CUDA="12.4" ; echo "Warning: System CUDA is 12.1 but using PyTorch CUDA 12.4 (required for libcu++)" ;;
     12.4*) PYTORCH_CUDA="12.4" ;;
-    12.*) PYTORCH_CUDA="12.1" ;;  # Default for other 12.x
-    *) PYTORCH_CUDA="12.1" ;;      # Default fallback
+    12.*) PYTORCH_CUDA="12.4" ;;  # Default for other 12.x
+    *) PYTORCH_CUDA="12.4" ;;      # Default fallback - use 12.4 for libcu++ headers
 esac
 echo "Using pytorch-cuda=$PYTORCH_CUDA"
 
 # Create conda environment
 ENV_NAME="mast3r-slam"
 if conda env list | grep -q "^${ENV_NAME} "; then
-    echo "Environment '$ENV_NAME' already exists. Activating..."
+    echo "Environment '$ENV_NAME' already exists."
+    echo "To start fresh, run: conda env remove -n $ENV_NAME"
+    echo "Then re-run this script."
+    echo ""
+    echo "Continuing with existing environment..."
 else
     echo "Creating conda environment '$ENV_NAME'..."
     conda create -n $ENV_NAME python=3.11 -y
@@ -58,7 +63,26 @@ export CPATH=$CONDA_PREFIX/targets/x86_64-linux/include:$CPATH
 export LIBRARY_PATH=$CONDA_PREFIX/lib:$LIBRARY_PATH
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 
+# Force system GCC for CUDA compatibility (avoids issues with conda-forge GCC 12+)
+export CUDAHOSTCXX=/usr/bin/gcc
+export CXX=/usr/bin/g++
+export CC=/usr/bin/gcc
+
 echo "CUDA_HOME set to: $CUDA_HOME"
+echo "Using GCC: $(which gcc) (version: $(/usr/bin/gcc --version | head -1))"
+
+# Create symlinks for CUDA headers needed by CUDA extensions
+# nv/ headers (needed for cuda_bf16.hpp)
+if [ -d "$CONDA_PREFIX/targets/x86_64-linux/include/nv" ] && [ ! -e "$CONDA_PREFIX/include/nv" ]; then
+    echo "Creating symlink for nv/ headers..."
+    ln -sf $CONDA_PREFIX/targets/x86_64-linux/include/nv $CONDA_PREFIX/include/nv
+fi
+
+# cuda/ headers from CCCL (needed for cuda/std/limits in libcu++)
+if [ -d "$CONDA_PREFIX/targets/x86_64-linux/include/cccl/cuda" ] && [ ! -e "$CONDA_PREFIX/include/cuda" ]; then
+    echo "Creating symlink for CCCL cuda/ headers (libcu++)..."
+    ln -sf $CONDA_PREFIX/targets/x86_64-linux/include/cccl/cuda $CONDA_PREFIX/include/cuda
+fi
 
 # Initialize submodules
 echo "Initializing submodules..."
@@ -82,7 +106,7 @@ pip install --no-deps -e thirdparty/in3d
 
 # Install in3d dependencies (except imgui which is already installed)
 echo "Installing in3d dependencies..."
-pip install PyOpenGL PyOpenGL_accelerate glfw pyglm trimesh pillow
+pip install PyOpenGL PyOpenGL_accelerate glfw pyglm trimesh pillow moderngl==5.12.0 moderngl-window==2.4.6 msgpack
 
 # Install MASt3R-SLAM (includes lietorch CUDA extension)
 echo "Installing MASt3R-SLAM..."
