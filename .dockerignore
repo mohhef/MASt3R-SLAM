@@ -1,0 +1,36 @@
+# Exclude large host artifacts from the podman build context. Each entry
+# below significantly slows the COPY step or balloons the resulting image
+# with state the container shouldn't carry. See deps/slam-algorithms/
+# MASt3R-SLAM/Dockerfile for the runtime bind-mount conventions.
+
+# Foundation-model checkpoints (~2.9 GB total). Bind-mounted read-only
+# at runtime via the wrapper's _build_container_execution_spec -- see
+# docs/MAST3R_SLAM_PODMAN.md, "Foundation-model checkpoints".
+checkpoints/
+
+# Host-side trajectory logs from prior conda runs. The container's logs/
+# dir is bind-mounted to the host output_dir at run time.
+logs/
+
+# Editor / Python / build noise.
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.git/
+.gitignore
+.dockerignore
+.idea/
+.vscode/
+*.swp
+
+# Built CUDA extensions from the host. The Dockerfile's strip step
+# removes these from the in-container source too, but excluding them
+# here avoids COPYing megabytes of stale binaries that won't be used.
+build/
+*.so
+mast3r_slam_backends*.so
+thirdparty/in3d/build/
+thirdparty/mast3r/build/
+thirdparty/mast3r/asmk/build/
+thirdparty/mast3r/dust3r/croco/models/curope/build/
