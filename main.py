@@ -24,6 +24,53 @@ from mast3r_slam.tracker import FrameTracker
 from mast3r_slam.visualization import WindowMsg, run_visualization
 import torch.multiprocessing as mp
 
+# --- SAL real-time deadline harness ---------------------------------------
+# When SAL_DEADLINE_FPS is set, the runtime-stress framework bind-mounts a
+# directory holding deadline_iterator.py and points SAL_RUNTIME_PATH at it.
+# The frame loop below then pulls dataset indices from a DeadlineIterator, so
+# frames whose wall-clock deadline has passed are dropped before MASt3R-SLAM
+# ever processes them. With the var unset, main.py runs exactly as upstream.
+import os
+
+
+def _load_deadline_iterator():
+    """Import DeadlineIterator from SAL_RUNTIME_PATH on demand."""
+    runtime_path = os.environ.get("SAL_RUNTIME_PATH")
+    if runtime_path and runtime_path not in sys.path:
+        sys.path.insert(0, runtime_path)
+    from deadline_iterator import DeadlineIterator  # noqa: E402
+
+    return DeadlineIterator
+
+
+def _build_frame_source(dataset):
+    """Iterator over dataset indices for the main loop.
+
+    With SAL_DEADLINE_FPS set, indices come from a DeadlineIterator paced to
+    the target FPS (dropping late frames per the configured queue depth and
+    drop policy). Otherwise it is a plain range, identical to upstream. Frame
+    indices are the real dataset positions, so dropped frames simply produce
+    sparser keyframes — save_traj keys timestamps by frame_id, so no remap is
+    needed.
+    """
+    n = len(dataset)
+    fps = os.environ.get("SAL_DEADLINE_FPS")
+    if not fps:
+        return iter(range(n))
+    DeadlineIterator = _load_deadline_iterator()
+    warmup = int(os.environ.get("SAL_DEADLINE_WARMUP_FRAMES", 0) or 0)
+    queue_size = int(os.environ.get("SAL_DEADLINE_QUEUE_SIZE", 1) or 1)
+    drop_policy = os.environ.get("SAL_DEADLINE_DROP_POLICY", "drop_oldest") or "drop_oldest"
+    return iter(
+        DeadlineIterator(
+            list(range(n)),
+            float(fps),
+            warmup_frames=warmup,
+            queue_size=queue_size,
+            drop_policy=drop_policy,
+        )
+    )
+
 
 def relocalization(frame, keyframes, factor_graph, retrieval_database):
     # we are adding and then removing from the keyframe, so we need to be careful.
@@ -225,7 +272,15 @@ if __name__ == "__main__":
     backend = mp.Process(target=run_backend, args=(config, model, states, keyframes, K))
     backend.start()
 
-    i = 0
+    frame_source = _build_frame_source(dataset)
+
+    def _next_frame_index():
+        try:
+            return next(frame_source)
+        except StopIteration:
+            return None
+
+    i = _next_frame_index()
     fps_timer = time.time()
 
     frames = []
@@ -246,7 +301,7 @@ if __name__ == "__main__":
         if not last_msg.is_paused:
             states.unpause()
 
-        if i == len(dataset):
+        if i is None:
             states.set_mode(Mode.TERMINATED)
             break
 
@@ -270,7 +325,7 @@ if __name__ == "__main__":
             states.queue_global_optimization(len(keyframes) - 1)
             states.set_mode(Mode.TRACKING)
             states.set_frame(frame)
-            i += 1
+            i = _next_frame_index()
             continue
 
         if mode == Mode.TRACKING:
@@ -307,7 +362,7 @@ if __name__ == "__main__":
         if i % 30 == 0:
             FPS = i / (time.time() - fps_timer)
             print(f"FPS: {FPS}")
-        i += 1
+        i = _next_frame_index()
 
     if dataset.save_results:
         save_dir, seq_name = eval.prepare_savedir(args, dataset)
